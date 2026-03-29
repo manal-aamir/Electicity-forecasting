@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+.env
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+
+# LaTeX build artifacts
+*.aux
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.toc
+*.bbl
+*.blg
+
+# Large / local data (downloaded by the pipeline)
+data/raw/*.txt
+data/raw/*.zip
+
+# Generated experiment outputs (re-run `make run` to recreate)
+outputs/
+
+# Optional: keep compiled paper PDF out of git (uncomment if repo size matters)
+# IEEE_paper_draft.pdf
+
+# Reference PDF bundled with coursework (large)
+Explainable_AI*.pdf
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/

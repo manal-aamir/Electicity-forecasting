@@ -1,0 +1,714 @@
+\documentclass[10pt,twocolumn,letterpaper]{article}
+
+% ── Packages ──────────────────────────────────────────────────────────────────
+\usepackage[
+  top=0.75in, bottom=1in,
+  left=0.625in, right=0.625in,
+  columnsep=0.25in
+]{geometry}
+\usepackage{times}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{mathtools}
+\usepackage{bm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{caption}
+\usepackage{xcolor}
+\usepackage{flushend}
+\usepackage{cite}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+\usepackage{microtype}
+\usepackage{titlesec}
+\usepackage{abstract}
+\usepackage{enumitem}
+
+% ── IEEE-style section headings ───────────────────────────────────────────────
+\titleformat{\section}
+  {\normalfont\normalsize\bfseries\scshape\centering}
+  {\Roman{section}.}{0.5em}{}
+\titlespacing{\section}{0pt}{8pt plus 2pt minus 2pt}{4pt plus 1pt}
+
+\titleformat{\subsection}
+  {\normalfont\normalsize\itshape}
+  {\Alph{subsection}.}{0.4em}{}
+\titlespacing{\subsection}{0pt}{6pt plus 1pt minus 1pt}{3pt plus 1pt}
+
+% ── Paragraph style ───────────────────────────────────────────────────────────
+\setlength{\parindent}{1em}
+\setlength{\parskip}{0pt}
+
+% ── Caption style ─────────────────────────────────────────────────────────────
+\captionsetup{font=small, labelfont=bf, labelsep=period}
+\captionsetup[table]{position=above, labelfont={bf,sc}, justification=centering}
+
+% ── Abstract override (full width, indented IEEE style) ───────────────────────
+\renewenvironment{abstract}{%
+  \twocolumn[{%
+    % Title block
+    \begin{center}
+      \vspace*{6pt}
+      {\fontsize{17}{20}\selectfont\bfseries
+        Interpretable Multi-Scale Household Energy Forecasting via \\
+        Holt--Winters Feature Augmentation, XGBoost, and Post-hoc Explanations
+      }\par
+      \vspace{12pt}
+      {\normalsize
+        Manaal Aamir \quad and \quad Arhum Khan \par
+        \vspace{3pt}
+        \textit{Department of Data Science, FAST University, Karachi, Pakistan} \par
+        \vspace{2pt}
+        \small manaal.aamir.2003@gmail.com \quad$|$\quad khan19@gmail.com
+      }
+      \vspace{14pt}
+    \end{center}
+    % Abstract box
+    \begin{list}{}{%
+      \setlength{\leftmargin}{0.45in}
+      \setlength{\rightmargin}{0.45in}
+      \setlength{\topsep}{0pt}
+      \setlength{\itemsep}{0pt}
+    }
+    \item[]
+    {\small\textbf{\textit{Abstract}---}\ignorespaces
+}{%
+    }
+    \end{list}
+    \vspace{4pt}
+  }]
+}
+
+% ── Index terms environment ───────────────────────────────────────────────────
+\newenvironment{IEEEkeywords}{%
+  \begin{list}{}{%
+    \setlength{\leftmargin}{0.45in}
+    \setlength{\rightmargin}{0.45in}
+    \setlength{\topsep}{0pt}
+  }
+  \item[]{\small\textbf{\textit{Index Terms}---}\ignorespaces}%
+  \small
+}{%
+  \end{list}
+  \vspace{4pt}
+  \noindent\rule{\linewidth}{0.4pt}
+  \vspace{6pt}
+}
+
+\pagestyle{empty}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\begin{document}
+
+\begin{abstract}
+Most energy forecasting papers hand you a table with one RMSE per scale
+and call it done. That number does not tell you when the model breaks
+down or which features actually matter versus which just look important
+on a SHAP plot. This paper builds a forecasting framework around that
+gap. The approach combines Holt--Winters exponential smoothing with
+XGBoost---an established pattern in the literature---but extends it with
+leakage-aware feature engineering, temporal error decomposition by
+hour-of-day, day-of-week, and month, and controlled feature intervention
+studies through drop-one ablation and lag add-feature experiments. The
+UCI Individual Household Electric Power Consumption dataset is used for
+evaluation across hourly, daily, weekly, monthly, and quarterly
+resolutions. Results show that aggregate RMSE hides non-uniform
+degradation patterns only visible when error is sliced by time. Adding
+autoregressive lag features materially improved performance at hourly
+granularity and shifted SHAP attribution rankings---illustrating that
+feature importance cannot be interpreted in isolation from what features
+are present.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Energy forecasting, XGBoost, Holt--Winters, explainable AI, SHAP, LIME,
+error analysis, feature ablation, time-series cross-validation.
+\end{IEEEkeywords}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Introduction}
+
+Residential electricity forecasting sits at the center of smart-grid
+orchestration, demand response, and household energy optimization. Get
+it wrong and operating costs rise, scheduling quality drops, and users
+stop trusting the automated systems built on top of the forecasts. Get
+it right on the aggregate metric but miss the temporal failure patterns,
+and the problem is roughly the same---you just do not know it yet.
+
+Gradient-boosted tree models, XGBoost in particular, consistently
+achieve strong predictive performance on tabular time-series problems.
+The trade-off is interpretability. A model that a domain user or system
+operator cannot interrogate is difficult to trust, regardless of its
+error metrics. Post-hoc explanation methods---SHAP, LIME, permutation
+importance, partial dependence plots---partially address this, but they
+report attributions given a fixed feature set. They cannot tell you
+whether a highly attributed feature is load-bearing or whether removing
+it would barely move the needle.
+
+The pipeline built in this work starts from an existing
+approach---Holt--Winters decomposition for feature augmentation fed into
+XGBoost---and extends it in three concrete directions the base
+formulation does not cover. First, leakage in the HW component features
+is fixed by lagging them one step, so that predicting $y$ at $t{+}1$
+uses only values known at $t$. Second, the RMSE is broken into time
+slices by hour-of-day, day-of-week, and month, exposing failure windows
+a single number cannot reveal. Third, feature interventions---drop-one
+ablation and lag add-feature experiments---measure accuracy changes
+directly rather than relying on attribution alone.
+
+\subsection{Contributions}
+
+\begin{itemize}[leftmargin=1.5em, itemsep=2pt, topsep=3pt]
+  \item A reproducible HW+XGB+XAI pipeline for household energy
+    forecasting across hourly, daily, weekly, monthly, and quarterly
+    resolutions, runnable end-to-end from a single CLI command.
+  \item Leakage-aware temporal modeling via chronological splits,
+    \texttt{TimeSeriesSplit} cross-validation, and one-step-lagged
+    Holt--Winters component features.
+  \item Error decomposition by hour-of-day (24 buckets), day-of-week
+    (7 buckets), and month (12 buckets), exposing non-uniform
+    degradation patterns hidden by aggregate RMSE.
+  \item Feature intervention analysis via drop-one ablation and
+    target-lag add-feature experiments, quantifying accuracy deltas and
+    corresponding SHAP attribution shifts.
+\end{itemize}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Literature Review}
+
+\subsection{Household Energy Forecasting}
+
+Household electricity forecasting methods split into three broad groups:
+classical statistical models such as exponential smoothing and ARIMA
+variants, machine learning approaches built around tree ensembles, and
+deep learning architectures~\cite{hyndman2021}. Statistical models
+handle seasonality well but underfit non-linear demand patterns. Deep
+learning models capture complex dependencies but require substantial
+data and are difficult to explain to system operators. Tree ensembles
+sit in the middle: strong predictive accuracy, moderate training cost,
+and amenable to post-hoc explanation~\cite{chen2016xgboost}.
+
+Hybrid approaches combining classical decomposition with machine
+learning are an active area. Holt--Winters exponential smoothing is a
+common decomposition choice because it handles both trend and
+seasonality with few parameters and is computationally cheap. Most
+published HW+ML pipelines either forecast each component separately
+and combine outputs, or feed component estimates as features to a
+downstream learner. This work takes the latter approach.
+
+\subsection{Interpretable Machine Learning for Energy Systems}
+
+Post-hoc interpretability methods divide into global and local
+explanations. SHAP provides additive feature attributions grounded in
+cooperative game theory, with efficient TreeSHAP implementations for
+gradient-boosted models~\cite{lundberg2017shap}. LIME fits a local
+linear surrogate around a specific prediction~\cite{ribeiro2016lime}.
+Permutation Feature Importance (PFI) shuffles one feature at a time
+and measures the accuracy drop. Partial Dependence Plots (PDP) show
+the marginal effect of a feature averaged over the distribution of
+other inputs~\cite{goldstein2015peeking}.
+
+Using multiple methods together is more informative than any single
+one. SHAP and PFI do not always agree, and that disagreement often
+indicates feature interactions or instability under perturbation---both
+worth reporting rather than explaining away.
+
+\subsection{Research Gap}
+
+The standard evaluation practice in energy forecasting is to report a
+single aggregate metric per scale and present SHAP or PFI plots as
+evidence of interpretability. This has two problems. First, aggregate
+RMSE obscures temporal failure concentration. Second, feature
+attribution without feature intervention does not establish causal
+importance---a feature can rank highly on SHAP while being almost
+entirely redundant. This work addresses both gaps directly.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Dataset and Preprocessing}
+
+\subsection{Dataset}
+
+All experiments use the UCI Individual Household Electric Power
+Consumption dataset~\cite{uci2012}, recorded at one-minute resolution
+over roughly four years from a single household in Sceaux, France. The
+dataset includes global active power $P_{\text{global}}$, reactive
+power $Q_{\text{global}}$, voltage $V$, global intensity $I$, and
+three sub-metering channels $S_1, S_2, S_3$ corresponding to the
+kitchen, laundry room, and water heater or air conditioning loads.
+
+\subsection{Cleaning and Feature Construction}
+
+Let $\mathcal{T} = \{t_1, t_2, \ldots, t_N\}$ denote the full
+timestamp index. Missing values are filled using time-based linear
+interpolation:
+\begin{equation}
+  x(t) = x(t_a) + \frac{t - t_a}{t_b - t_a}\bigl(x(t_b) - x(t_a)\bigr),
+  \label{eq:interp}
+\end{equation}
+where $t_a$ and $t_b$ are the nearest non-missing timestamps bracketing
+$t$, followed by forward and backward fill for residual gaps.
+
+Cyclical time encodings are added to avoid boundary discontinuities
+with raw integer features. For hour-of-day $h \in \{0,\ldots,23\}$
+and day-of-week $d \in \{0,\ldots,6\}$:
+\begin{align}
+  \text{hour\_sin} &= \sin\!\left(\tfrac{2\pi h}{24}\right), &
+  \text{hour\_cos} &= \cos\!\left(\tfrac{2\pi h}{24}\right), \label{eq:hourcyc}\\[2pt]
+  \text{dow\_sin}  &= \sin\!\left(\tfrac{2\pi d}{7}\right),  &
+  \text{dow\_cos}  &= \cos\!\left(\tfrac{2\pi d}{7}\right).  \label{eq:dowcyc}
+\end{align}
+These encodings give the model a smooth periodic representation of
+time: Euclidean distance between any two time points is proportional
+to their circular distance on the clock or week cycle.
+
+\subsection{Multi-Scale Aggregation}
+
+The one-minute series is resampled to five temporal granularities
+$\mathcal{G} = \{\text{hourly, daily, weekly, monthly, quarterly}\}$.
+For a time window $\mathcal{W}$ of width $g \in \mathcal{G}$:
+\begin{equation}
+  \tilde{x}^{(g)}_{\mathcal{W}} =
+  \begin{cases}
+    \dfrac{1}{|\mathcal{W}|}\displaystyle\sum_{t \in \mathcal{W}} x_t
+      & \text{power-like variables,}\\[6pt]
+    \displaystyle\sum_{t \in \mathcal{W}} x_t
+      & \text{sub-metering channels.}
+  \end{cases}
+  \label{eq:resample}
+\end{equation}
+Summing the energy channels preserves total energy consumed per period.
+A stationarity check via the Augmented Dickey--Fuller (ADF) test is
+run on the training target per scale:
+\begin{equation}
+  \tau_{\text{ADF}} = \frac{\hat{\delta}}{\operatorname{SE}(\hat{\delta})},
+  \label{eq:adf}
+\end{equation}
+where $\hat{\delta}$ is the OLS estimate of the unit-root coefficient
+in $\Delta y_t = \alpha + \beta t + \delta y_{t-1}
++ \sum_{k=1}^{p}\gamma_k\Delta y_{t-k} + \varepsilon_t$.
+Results are written to JSON as a diagnostic only.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Methodology}
+
+\subsection{Holt--Winters Feature Augmentation}
+
+The additive Holt--Winters model decomposes the training target $y_t$:
+\begin{equation}
+  y_t = \ell_t + b_t + s_t + \varepsilon_t,
+  \label{eq:hw_decomp}
+\end{equation}
+where $\ell_t$ is the level, $b_t$ the trend, $s_t$ the seasonal
+component with period $m$, and $\varepsilon_t$ the residual. The
+smoothing recursions are:
+\begin{align}
+  \ell_t &= \alpha(y_t - s_{t-m}) + (1{-}\alpha)(\ell_{t-1} + b_{t-1}),\label{eq:hw_level}\\
+  b_t    &= \beta^*(\ell_t - \ell_{t-1}) + (1{-}\beta^*)b_{t-1},\label{eq:hw_trend}\\
+  s_t    &= \gamma(y_t - \ell_{t-1} - b_{t-1}) + (1{-}\gamma)s_{t-m},\label{eq:hw_season}
+\end{align}
+with $\alpha,\beta^*,\gamma \in [0,1]$ estimated by minimising
+sum-of-squared one-step forecast errors on training data:
+\begin{equation}
+  \min_{\alpha,\beta^*,\gamma}\;
+  \sum_{t=1}^{T_{\text{train}}} \bigl(y_t - \hat{y}_{t|t-1}\bigr)^2.
+  \label{eq:hw_optim}
+\end{equation}
+
+The standard HW+ML formulation suffers from leakage: component
+estimates at $t$ depend on $y_t$ yet are used to predict $y_t$.
+The fix applied here lags all components by one step:
+\begin{equation}
+  \bm{\phi}_t =
+  \bigl[\hat{\ell}_{t-1},\;\hat{b}_{t-1},\;\hat{s}_{t-1},\;\hat{\varepsilon}_{t-1}\bigr]^\top,
+  \label{eq:hw_lag}
+\end{equation}
+so that predicting $y_{t+1}$ uses only component values observable
+at~$t$.
+
+\subsection{Supervised Learning Formulation}
+
+The full feature vector at time $t$ is:
+\begin{equation}
+  \mathbf{x}_t =
+  \bigl[\mathbf{z}_t^\top,\;\mathbf{c}_t^\top,\;\bm{\phi}_t^\top,\;
+  (\mathbf{l}_t^\top)\bigr]^\top,
+  \label{eq:feature_vec}
+\end{equation}
+where $\mathbf{z}_t$ are original covariates,
+$\mathbf{c}_t = [\text{hour\_sin},\text{hour\_cos},\text{dow\_sin},\text{dow\_cos}]^\top$,
+$\bm{\phi}_t$ are the lagged HW components from~\eqref{eq:hw_lag},
+and $\mathbf{l}_t$ is an optional autoregressive lag block:
+\begin{equation}
+  \mathbf{l}_t = \bigl[y_{t-1},\;y_{t-24},\;y_{t-168}\bigr]^\top.
+  \label{eq:lag_features}
+\end{equation}
+The prediction target is $y_{t+1}$:
+\begin{equation}
+  \hat{y}_{t+1} = f(\mathbf{x}_t).
+  \label{eq:supervised}
+\end{equation}
+
+\subsection{XGBoost Regression and Tuning}
+
+XGBoost learns an additive ensemble of $K$ regression trees:
+\begin{equation}
+  \hat{y}_{t+1} = \sum_{k=1}^{K} f_k(\mathbf{x}_t),\quad f_k \in \mathcal{F}.
+  \label{eq:xgb_ensemble}
+\end{equation}
+The objective at iteration $k$ is:
+\begin{equation}
+  \mathcal{L}^{(k)} =
+  \sum_{t} \ell\!\left(y_{t+1},\,\hat{y}_{t+1}^{(k-1)} + f_k(\mathbf{x}_t)\right)
+  + \Omega(f_k),
+  \label{eq:xgb_obj}
+\end{equation}
+with regularisation:
+\begin{equation}
+  \Omega(f_k) = \gamma T + \tfrac{1}{2}\lambda\|\mathbf{w}\|^2,
+  \label{eq:xgb_reg}
+\end{equation}
+where $T$ is the number of leaves, $\mathbf{w}$ the leaf weight
+vector, $\gamma$ the minimum split gain, and $\lambda$ the $L_2$
+penalty. Hyperparameter tuning uses \texttt{TimeSeriesSplit}
+($n{=}5$) and \texttt{GridSearchCV}. Feature standardisation:
+\begin{equation}
+  \tilde{x}_{tj} =
+  \frac{x_{tj} - \mu_j^{\text{train}}}{\sigma_j^{\text{train}}},
+  \label{eq:standardise}
+\end{equation}
+with $\mu_j^{\text{train}}, \sigma_j^{\text{train}}$ computed on
+training data only.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Explainability and Diagnostics}
+
+\subsection{Post-hoc Explanation Methods}
+
+Four complementary methods are applied to each trained model.
+
+\textbf{SHAP (TreeSHAP)} computes Shapley values:
+\begin{equation}
+  \phi_j =
+  \sum_{S \subseteq \mathcal{F}\setminus\{j\}}
+  \frac{|S|!\,(|\mathcal{F}|-|S|-1)!}{|\mathcal{F}|!}
+  \bigl[v(S\cup\{j\}) - v(S)\bigr],
+  \label{eq:shap}
+\end{equation}
+where $v(S)$ is the model output conditioned on features in
+$S$~\cite{lundberg2017shap}. TreeSHAP runs in
+$\mathcal{O}(TLD^2)$ time.
+
+\textbf{LIME} fits a local linear surrogate $g$ around instance
+$\mathbf{x}_0$:
+\begin{equation}
+  g^* = \operatorname*{arg\,min}_{g\in\mathcal{G}}
+  \sum_{z}\pi_{\mathbf{x}_0}(z)\,\bigl[f(z)-g(z)\bigr]^2 + \Omega(g),
+  \label{eq:lime}
+\end{equation}
+with proximity kernel
+$\pi_{\mathbf{x}_0}(z) = \exp\!\left(-D(z,\mathbf{x}_0)^2/\sigma^2\right)$~\cite{ribeiro2016lime}.
+
+\textbf{Permutation Feature Importance (PFI)}:
+\begin{equation}
+  \text{PFI}_j =
+  \text{RMSE}(\mathbf{X}_{\pi_j}) - \text{RMSE}(\mathbf{X}),
+  \label{eq:pfi}
+\end{equation}
+where $\mathbf{X}_{\pi_j}$ has column $j$ randomly permuted.
+
+\textbf{Partial Dependence (PDP)} estimates the marginal effect of
+feature $j$:
+\begin{equation}
+  \hat{f}_j(x_j) =
+  \frac{1}{n}\sum_{i=1}^{n} f\!\left(x_j,\,\mathbf{x}_i^{(-j)}\right).
+  \label{eq:pdp}
+\end{equation}
+
+\subsection{Error Decomposition by Time Slice}
+
+For each temporal bucket $b$ in $\{\text{hour-of-day, day-of-week,
+month}\}$, the slice RMSE is:
+\begin{equation}
+  \text{RMSE}_{b} =
+  \sqrt{\frac{1}{|\mathcal{I}_b|}\sum_{t \in \mathcal{I}_b}
+  \bigl(y_{t+1} - \hat{y}_{t+1}\bigr)^2},
+  \label{eq:slice_rmse}
+\end{equation}
+where $\mathcal{I}_b = \{t \in \mathcal{T}_{\text{test}} :
+\text{bucket}(t) = b\}$. The 24 hourly, 7 daily, and 12 monthly
+slices together produce a map of where the model degrades---invisible
+in the scalar aggregate.
+
+\subsection{Feature Impact Studies}
+
+\textbf{Drop-one ablation.} For each feature $j$ in the top-$N$ by
+XGBoost gain, retrain on $\mathcal{F}\setminus\{j\}$ and compute:
+\begin{align}
+  \Delta\text{RMSE}_j &=
+    \text{RMSE}(f_{\mathcal{F}\setminus\{j\}}) - \text{RMSE}(f_{\mathcal{F}}),
+    \label{eq:ablation_rmse}\\
+  \Delta R^2_j &=
+    R^2(f_{\mathcal{F}}) - R^2\!\left(f_{\mathcal{F}\setminus\{j\}}\right).
+    \label{eq:ablation_r2}
+\end{align}
+Positive $\Delta\text{RMSE}_j$ indicates the feature was genuinely
+load-bearing; zero or negative values suggest redundancy.
+
+\textbf{Add-feature experiment.} Let
+$\mathcal{F}^+ = \mathcal{F} \cup \mathbf{l}_t$ be the augmented
+feature set. Record:
+\begin{equation}
+  \Delta\text{RMSE}^+ =
+  \text{RMSE}(f_{\mathcal{F}}) - \text{RMSE}(f_{\mathcal{F}^+}),
+  \label{eq:add_feat}
+\end{equation}
+alongside SHAP ranking shifts between $f_{\mathcal{F}}$ and
+$f_{\mathcal{F}^+}$.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Experimental Setup}
+
+\subsection{Evaluation Metrics}
+
+Four metrics are reported for test set $\{(y_i,\hat{y}_i)\}_{i=1}^n$:
+\begin{align}
+  \text{MAE}  &= \tfrac{1}{n}{\textstyle\sum}|y_i - \hat{y}_i|,
+    \label{eq:mae}\\
+  \text{MSE}  &= \tfrac{1}{n}{\textstyle\sum}(y_i - \hat{y}_i)^2,
+    \label{eq:mse}\\
+  \text{RMSE} &= \sqrt{\tfrac{1}{n}{\textstyle\sum}(y_i-\hat{y}_i)^2},
+    \label{eq:rmse}\\
+  R^2         &= 1 - \frac{{\textstyle\sum}(y_i-\hat{y}_i)^2}
+                          {{\textstyle\sum}(y_i-\bar{y})^2}.
+    \label{eq:r2}
+\end{align}
+RMSE is the primary comparison metric. $R^2$ provides a
+scale-independent reference. MAE is reported as a robustness check.
+
+\subsection{Train/Test Protocol}
+
+An 80/20 chronological split is used throughout; no shuffling occurs
+at any stage. Hyperparameter selection uses five-fold
+\texttt{TimeSeriesSplit} cross-validation applied exclusively to the
+training portion. The test set is touched once only, after
+hyperparameters are selected, to compute final metrics.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Results}
+
+\subsection{Aggregate Performance Across Scales}
+
+Table~\ref{tab:metrics} reports MAE, RMSE, and $R^2$ for each
+temporal scale. Performance generally improves at coarser
+scales---aggregation smooths short-term variability that is difficult
+to predict from available covariates alone. The hourly scale is the
+hardest, with the most volatile target and the strongest dependency
+on recent history.
+
+The negative $R^2$ at daily scale ($-0.2280$) is a clear signal: the
+model underperforms a naive mean predictor at that granularity. This
+likely reflects the smoothing effect of daily aggregation reducing
+the variance the model can exploit, combined with insufficient
+feature information to capture day-to-day fluctuations. Monthly
+($R^2 = 0.7580$) and quarterly ($R^2 = 0.8127$) scales show
+substantially stronger fit, where seasonal and trend components
+dominate and are well-captured by the HW augmentation.
+
+\begin{table}[t]
+  \caption{Forecasting Performance by Temporal Scale}
+  \label{tab:metrics}
+  \centering
+  \setlength{\tabcolsep}{6pt}
+  \begin{tabular}{lrrr}
+    \toprule
+    \textbf{Scale} & \textbf{MAE} & \textbf{RMSE} & $\bm{R^2}$ \\
+    \midrule
+    Hourly    & 0.4002 & 0.5258 & \phantom{$-$}0.4787 \\
+    Daily     & 0.2842 & 0.3457 & $-$0.2280           \\
+    Weekly    & 0.1432 & 0.1977 & \phantom{$-$}0.3356 \\
+    Monthly   & 0.0902 & 0.1037 & \phantom{$-$}0.7580 \\
+    Quarterly & 0.0627 & 0.0721 & \phantom{$-$}0.8127 \\
+    \bottomrule
+  \end{tabular}
+  \par\smallskip
+  {\footnotesize Source: \texttt{outputs/tables/metrics\_latest.csv}.
+   Negative $R^2$ at daily scale indicates the model underperforms
+   a naive mean predictor at that granularity.}
+\end{table}
+
+\subsection{Temporal Error Decomposition}
+
+Slicing test RMSE by hour-of-day, day-of-week, and month using
+\eqref{eq:slice_rmse} confirms that aggregate metrics hide
+operationally important variation. Evening hours, when household
+demand peaks and usage patterns are more variable, consistently show
+elevated RMSE relative to overnight windows. Day-of-week slices
+reveal higher error on weekdays at certain scales, reflecting
+work-schedule-dependent consumption patterns the model captures
+imperfectly. Monthly slices expose seasonal variation: winter months
+show higher absolute error where heating or cooling loads dominate.
+These patterns indicate where confidence intervals should be widened
+and where additional features---weather, occupancy proxies---would
+provide the most benefit.
+
+\subsection{Feature Ablation and Lag Add-Feature Results}
+
+Drop-one ablation, computed via
+\eqref{eq:ablation_rmse}--\eqref{eq:ablation_r2}, shows that not all
+top-SHAP features are equally load-bearing. Several features that
+ranked highly by gain showed only modest $\Delta\text{RMSE}$ when
+removed, suggesting shared predictive contribution with correlated
+features. A smaller subset showed clear positive $\Delta\text{RMSE}$
+on removal, confirming genuine predictive necessity.
+
+Adding target lag features via \eqref{eq:lag_features} at hourly
+resolution improved RMSE materially, with $\Delta\text{RMSE}^+$ from
+\eqref{eq:add_feat} driven primarily by the 1-step and 24-step lags.
+The SHAP ranking shifted after lags were added: HW-derived features
+dropped in relative attribution because the autoregressive lags
+absorbed much of the short-term predictive load. This demonstrates
+why feature importance rankings must not be interpreted independently
+of what features are present.
+
+\subsection{Explainability Outcomes}
+
+SHAP summary plots show global feature ranking and directionality.
+The HW level component $\hat{\ell}_{t-1}$ consistently ranks among
+the top features---level tracks the current baseline of consumption,
+and the next-step value is closely tied to it. Cyclical time features
+(hour\_sin, hour\_cos) rank highly at hourly scale and less so at
+coarser scales where within-day variation is averaged out.
+
+LIME explanations for selected test instances show that local feature
+rankings can differ substantially from global SHAP rankings,
+particularly for unusual consumption periods. PFI rankings computed
+via \eqref{eq:pfi} do not always match SHAP rankings---a signal of
+features whose importance depends on interaction effects rather than
+independent marginal contribution. PDP plots via \eqref{eq:pdp}
+confirm expected monotonic relationships for level and trend
+components and nonlinear response curves for cyclical time features.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Discussion}
+
+Three practical points stand out.
+
+First, aggregate metrics are not enough for deployment decisions. A
+model that looks fine on average can be substantially degraded during
+the hours and seasons that matter most. Temporal error decomposition
+\eqref{eq:slice_rmse} is cheap to compute and adds real operational
+value---it should be a default part of any evaluation pipeline, not
+an optional diagnostic.
+
+Second, feature attribution is not the same as feature necessity.
+High Shapley values \eqref{eq:shap} are often shared across
+correlated features. Ablation studies
+\eqref{eq:ablation_rmse}--\eqref{eq:ablation_r2} are the more direct
+test, and their results do not always match attribution rankings.
+Both should be reported when interpretability matters for deployment.
+
+Third, the HW+XGB combination offers a reasonable middle ground
+between fully statistical and fully black-box approaches. The
+Holt--Winters recursions \eqref{eq:hw_level}--\eqref{eq:hw_season}
+are transparent and produce interpretable components. XGBoost handles
+the non-linear residuals via \eqref{eq:xgb_ensemble}. The combination
+is not the highest-accuracy possible approach, but it is
+substantially more interpretable and easier to audit.
+
+\subsection{Threats to Validity}
+
+The main limitations are single-dataset evaluation, limited
+hyperparameter search breadth, and absence of uncertainty
+quantification. The dataset covers a single household in France;
+generalisation to different household types, climates, or grid
+contexts is an open question. The daily-scale negative $R^2$ warrants
+further investigation: it may reflect aggregation collapsing the
+predictive signal present at finer granularities.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Conclusion and Future Work}
+
+This paper built and evaluated an interpretable multi-scale energy
+forecasting pipeline combining Holt--Winters feature augmentation
+\eqref{eq:hw_decomp}--\eqref{eq:hw_lag}, XGBoost regression
+\eqref{eq:xgb_ensemble}, and four post-hoc explanation methods. The
+core prediction approach existed in prior work. What was added---
+leakage-aware component lagging, temporal error decomposition, drop-one
+ablation, and lag add-feature experiments---addresses the evaluation
+and interpretability gaps most published HW+ML work leaves open.
+
+The main result is not a new state-of-the-art accuracy number. It is
+a more honest picture of where a well-built baseline model succeeds and
+where it struggles, and a cleaner methodology for connecting feature
+importance claims to actual predictive necessity. The daily-scale
+result ($R^2 = -0.228$) is a useful reminder that aggregation does
+not always help: smoothing can collapse the very signal a model needs.
+
+Future work will focus on: (i)~cross-dataset generalisation to
+evaluate robustness across household types and geographies;
+(ii)~uncertainty quantification via conformal prediction or quantile
+regression; (iii)~concept-drift detection and adaptive retraining;
+and (iv)~richer contextual features---weather data, occupancy
+proxies---most likely to reduce error in the peak-period windows
+identified by the error decomposition analysis.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section*{Reproducibility}
+
+All experiments run end-to-end from a single CLI entry point. Outputs
+are organised under \texttt{outputs/} as follows:
+\texttt{metrics\_latest.csv} and \texttt{metrics\_history.csv} for
+performance; \texttt{error\_slice\_*} tables and plots for temporal
+decomposition; \texttt{ablation\_drop1\_*} for ablation;
+\texttt{pfi\_*} for permutation importance; \texttt{shap\_summary\_*}
+and \texttt{pdp\_*} for global explanations; and \texttt{lime\_*}
+HTML for per-instance local explanations.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\begin{thebibliography}{00}
+
+\bibitem{uci2012}
+UCI Machine Learning Repository, ``Individual Household Electric Power
+Consumption Dataset,'' 2012. [Online]. Available:
+\url{https://archive.ics.uci.edu/ml/datasets/individual+household+electric+power+consumption}
+
+\bibitem{chen2016xgboost}
+T.~Chen and C.~Guestrin, ``XGBoost: A Scalable Tree Boosting System,''
+in \textit{Proc.\ 22nd ACM SIGKDD Int.\ Conf.\ Knowledge Discovery and
+Data Mining}, San Francisco, CA, 2016, pp.~785--794.
+
+\bibitem{lundberg2017shap}
+S.~M.~Lundberg and S.-I.~Lee, ``A Unified Approach to Interpreting
+Model Predictions,'' in \textit{Advances in Neural Information
+Processing Systems (NeurIPS)}, vol.~30, 2017.
+
+\bibitem{ribeiro2016lime}
+M.~T.~Ribeiro, S.~Singh, and C.~Guestrin, ```Why Should I Trust
+You?': Explaining the Predictions of Any Classifier,'' in
+\textit{Proc.\ 22nd ACM SIGKDD Int.\ Conf.\ Knowledge Discovery and
+Data Mining}, 2016, pp.~1135--1144.
+
+\bibitem{hyndman2021}
+R.~J.~Hyndman and G.~Athanasopoulos, \textit{Forecasting: Principles
+and Practice}, 3rd~ed. Melbourne, Australia: OTexts, 2021. [Online].
+Available: \url{https://otexts.com/fpp3}
+
+\bibitem{holt2004}
+C.~C.~Holt, ``Forecasting Seasonals and Trends by Exponentially
+Weighted Moving Averages,'' \textit{Int.\ J.\ Forecasting}, vol.~20,
+no.~1, pp.~5--10, 2004.
+
+\bibitem{winters1960}
+P.~R.~Winters, ``Forecasting Sales by Exponentially Weighted Moving
+Averages,'' \textit{Management Science}, vol.~6, no.~3,
+pp.~324--342, 1960.
+
+\bibitem{goldstein2015peeking}
+A.~Goldstein, A.~Kapelner, J.~Bleich, and E.~Pitkin, ``Peeking Inside
+the Black Box: Visualizing Statistical Learning with Plots of
+Individual Conditional Expectation,'' \textit{J.\ Computational and
+Graphical Statistics}, vol.~24, no.~1, pp.~44--65, 2015.
+
+\end{thebibliography}
+
+\end{document}
