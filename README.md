@@ -73,3 +73,4 @@ gh repo create YOUR_REPO --public --source=. --remote=origin --push
 ```
 
 Large files (`data/raw/*.txt`, `outputs/`, reference PDF) are listed in `.gitignore`; collaborators run the pipeline to regenerate outputs.
+# Electicity-forecasting
