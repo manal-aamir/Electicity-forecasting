@@ -37,6 +37,7 @@ def fit_split_conformal_bands(
     xgb_params: dict,
     alphas: tuple[float, ...] = (0.1, 0.05),
     calibration_fraction: float = 0.2,
+    clip_lower_at_zero: bool = False,
 ) -> dict[float, ConformalBand]:
     """
     Fit split conformal intervals for XGBoost regression.
@@ -64,6 +65,8 @@ def fit_split_conformal_bands(
         qhat = _split_conformal_qhat(abs_res, alpha)
         lower = test_pred - qhat
         upper = test_pred + qhat
+        if clip_lower_at_zero:
+            lower = np.maximum(lower, 0.0)
         coverage = float(np.mean((y_test >= lower) & (y_test <= upper)))
         avg_width = float(np.mean(upper - lower))
         out[alpha] = ConformalBand(

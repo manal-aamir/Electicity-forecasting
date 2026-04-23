@@ -63,20 +63,27 @@ def main() -> None:
         if not scales or not targets:
             st.error("Select at least one scale and one target.")
         else:
-            with st.spinner("Running pipeline... this may take a few minutes"):
-                run_experiment(
-                    project_root=PROJECT_ROOT,
-                    scales=scales,
-                    targets=targets,
-                    test_size=float(test_size),
-                    shap_samples=int(shap_samples),
-                    lime_samples=int(lime_samples),
-                    target_lags=lags if lags else None,
-                    run_ablation=run_ablation,
-                    ablation_top_n=int(ablation_top_n),
-                    allow_download=True,
+            try:
+                with st.spinner("Running pipeline... this may take a few minutes"):
+                    run_experiment(
+                        project_root=PROJECT_ROOT,
+                        scales=scales,
+                        targets=targets,
+                        test_size=float(test_size),
+                        shap_samples=int(shap_samples),
+                        lime_samples=int(lime_samples),
+                        target_lags=lags if lags else None,
+                        run_ablation=run_ablation,
+                        ablation_top_n=int(ablation_top_n),
+                        allow_download=True,
+                    )
+                st.success("Experiment finished. Outputs refreshed.")
+            except ValueError as e:
+                st.error(
+                    f"{e}\n\nTip: for coarse scales (weekly/monthly/quarterly), "
+                    "use smaller lags (e.g., 1,2,4) or leave lag field empty."
                 )
-            st.success("Experiment finished. Outputs refreshed.")
+                st.stop()
 
     st.subheader("Metrics")
     metrics = _read_csv(OUT_TABLES / "metrics_latest.csv")

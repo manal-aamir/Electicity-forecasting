@@ -69,6 +69,41 @@ def add_lag_features(
     return out
 
 
+def default_target_lags_for_scale(scale: str) -> list[int]:
+    # Strong autoregressive memory by resolution.
+    # hourly: previous hour, previous day, previous week
+    # daily: previous day, previous week, previous month-ish
+    # weekly/monthly/quarterly: short + seasonal memories
+    return {
+        "hourly": [1, 24, 168],
+        "daily": [1, 7, 30],
+        "weekly": [1, 4, 12],
+        "monthly": [1, 3, 12],
+        "quarterly": [1, 2, 4],
+    }[scale]
+
+
+def add_rolling_features(
+    df: pd.DataFrame,
+    *,
+    cols: list[str],
+    windows: list[int],
+) -> pd.DataFrame:
+    """
+    Add rolling mean/std features using prior observations (shifted by 1).
+    """
+    out = df.copy()
+    for c in cols:
+        if c not in out.columns:
+            continue
+        s = out[c]
+        for w in windows:
+            wi = int(w)
+            out[f"{c}_rollmean_{wi}"] = s.rolling(window=wi, min_periods=wi).mean().shift(1)
+            out[f"{c}_rollstd_{wi}"] = s.rolling(window=wi, min_periods=wi).std().shift(1)
+    return out
+
+
 def fit_holt_winters_components(
     y_train: pd.Series,
     seasonal_periods: int,

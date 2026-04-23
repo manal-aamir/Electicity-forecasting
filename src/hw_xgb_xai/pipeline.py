@@ -12,7 +12,13 @@ from sklearn.preprocessing import StandardScaler
 from statsmodels.tsa.stattools import adfuller
 
 from .data import download_uci_dataset, interpolate_missing, load_power_consumption_txt, resample_scale
-from .features import add_cyclical_time_features, add_lag_features, hw_components_one_step_ahead_features
+from .features import (
+    add_cyclical_time_features,
+    add_lag_features,
+    add_rolling_features,
+    default_target_lags_for_scale,
+    hw_components_one_step_ahead_features,
+)
 from .modeling import compute_metrics, tune_xgb_time_series
 from .ablation import drop_one_feature_ablation
 from .counterfactual import generate_counterfactual_recourse
@@ -63,6 +69,16 @@ def _next_step_supervised(df: pd.DataFrame, target_col: str) -> tuple[pd.DataFra
     X = X.dropna()
     y = y.loc[X.index]
     return X, y
+
+
+def _default_rolling_windows(scale: str) -> list[int]:
+    return {
+        "hourly": [3, 24],
+        "daily": [3, 7],
+        "weekly": [2, 4],
+        "monthly": [2, 3],
+        "quarterly": [2],
+    }[scale]
 
 
 def run_experiment(
@@ -133,16 +149,32 @@ def run_experiment(
                 scale=scale,
             )
             df_aug = pd.concat([df, hw_feats], axis=1)
-            if target_lags:
-                df_aug = add_lag_features(df_aug, cols=[target], lags=target_lags)
+
+            # Autoregressive information is critical at fine scales (especially hourly).
+            lags_eff = target_lags if target_lags else default_target_lags_for_scale(scale)
+            df_aug = add_lag_features(df_aug, cols=[target], lags=lags_eff)
+
+            # Rolling context features to improve short-term dynamics.
+            df_aug = add_rolling_features(df_aug, cols=[target], windows=_default_rolling_windows(scale))
 
             # Supervised next-step dataset
             X_all, y_all = _next_step_supervised(df_aug, target_col=target)
+            if len(X_all) < 10:
+                raise ValueError(
+                    f"Insufficient samples for scale={scale}, target={target} after lag/rolling feature construction. "
+                    "Reduce lag windows (e.g., remove large lags like 168 for coarse scales), "
+                    "or run this target/scale with default settings."
+                )
             # Split AFTER shifting/lagging so X/y lengths stay consistent.
             n_all = len(X_all)
             cut = int(np.floor((1.0 - test_size) * n_all))
             X_train, y_train = X_all.iloc[:cut], y_all.iloc[:cut]
             X_test, y_test = X_all.iloc[cut:], y_all.iloc[cut:]
+            if len(X_train) == 0 or len(X_test) == 0:
+                raise ValueError(
+                    f"Empty train/test split for scale={scale}, target={target}. "
+                    "Try smaller lag settings or a different scale."
+                )
 
             # Standardize (fit on train only)
             scaler = StandardScaler()
@@ -164,6 +196,7 @@ def run_experiment(
                 X_test=X_test_s,
                 y_test=y_test.to_numpy(),
                 xgb_params=model.get_params(),
+                clip_lower_at_zero=True,
             )
             interval_df = save_interval_table(
                 index=X_test.index,
