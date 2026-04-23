@@ -1,0 +1,89 @@
+\documentclass[conference]{IEEEtran}
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{url}
+
+\title{Project Proposal: Interpretable Multi-Scale Household Energy Forecasting\\
+Using Holt--Winters, XGBoost, and Explainable AI}
+
+\author{
+\IEEEauthorblockN{Manal Aamir, Arhum Khan}
+\IEEEauthorblockA{Course: Responsible AI\\
+Department: Data Science\\
+Base Paper Source: IEEE Access, 2025 (DOI: 10.1109/ACCESS.2025.3602673)}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This proposal presents our implementation plan for an explainable household energy forecasting system based on an IEEE Access paper that combines Holt--Winters decomposition, XGBoost prediction, and explainable AI (XAI) methods. Our objective is to reproduce the base methodology and deliver a working interactive proof of concept (POC). The system forecasts electricity consumption across multiple temporal scales (hourly to quarterly) and provides post-hoc explanations using SHAP, LIME, permutation feature importance, and partial dependence plots. In addition to reproduction, we include practical evaluation components that improve interpretability in deployment settings, including time-sliced error decomposition and feature impact analysis through ablation and lag-feature experiments. The final deliverable includes reproducible source code and an interactive interface (dashboard/web app) for demonstration.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Responsible AI, Explainability, Energy Forecasting, XGBoost, SHAP, LIME, Holt--Winters.
+\end{IEEEkeywords}
+
+\section{Selected Research Paper}
+\textbf{Title:} Explainable AI Framework Using XGBoost With SHAP and LIME for Multi-Scale Household Energy Forecasting.\\
+\textbf{Authors:} B. Devanathan, K. Jnana Varshitha, L. Pavan Kumar, S. A. Lakshmanan, N. Krishna Prakash.\\
+\textbf{Source:} IEEE Access, 2025.\\
+\textbf{DOI:} 10.1109/ACCESS.2025.3602673.
+
+\section{Domain}
+Our project is in the \textbf{Explainability} domain of Responsible AI. The focus is to build a high-performing forecasting model while ensuring transparency and trust through interpretable outputs. The work also supports accountability by exposing model behavior across different time contexts and feature interventions.
+
+\section{Problem Statement and Motivation}
+Household electricity forecasting is important for load balancing, cost optimization, and intelligent energy management. Although gradient-boosted models (e.g., XGBoost) provide strong predictive performance, their decision process is difficult to interpret in practical systems.
+
+The selected paper addresses this issue by integrating XAI tools (SHAP and LIME) with forecasting. However, real-world deployment requires more than a single aggregate accuracy score. Stakeholders need to know \emph{when} the model fails and \emph{which} features truly drive performance. Motivated by this, our project reproduces the base framework and augments it with additional interpretability-focused diagnostics.
+
+\section{Overview of Methodology}
+The implemented pipeline is summarized below.
+
+\subsection{Data and Preprocessing}
+We use the UCI Individual Household Electric Power Consumption dataset at minute-level resolution. Missing values are handled using time-based interpolation with forward and backward filling. The data is then aggregated at multiple temporal scales, namely hourly, daily, weekly, monthly, and quarterly. We also engineer cyclical time features for hour-of-day and day-of-week so that periodic temporal patterns are captured correctly.
+
+\subsection{Hybrid Forecasting Model}
+We fit an additive Holt--Winters decomposition on the training target series and extract level, trend, seasonal, and residual components. These components are used as additional features for XGBoost, meaning the design is feature augmentation rather than model stacking. The forecasting model is trained using a chronological train/test split and time-series-aware cross-validation so that temporal leakage is minimized and evaluation remains realistic for deployment conditions.
+
+\subsection{Explainability Layer}
+To interpret model behavior, we apply SHAP (TreeSHAP) for global and local feature attributions, LIME for instance-level explanations, permutation feature importance for sensitivity analysis, and partial dependence plots to visualize marginal feature effects. Together, these methods provide complementary views of why the model makes specific predictions.
+
+\subsection{Evaluation Metrics}
+We evaluate using MAE, MSE, RMSE, and $R^2$ across scales and targets.
+
+\section{Implementation Plan}
+
+\subsection{Tools and Libraries}
+The implementation is developed in Python 3.x. Data processing and modeling are handled using pandas, numpy, scikit-learn, statsmodels, and xgboost. Explainability is implemented with shap and lime, while matplotlib and seaborn are used for visualization. For reproducibility, we use joblib for model persistence, a Makefile for repeatable execution commands, and GitHub for version control and code submission.
+
+\subsection{Dataset and Artifacts}
+The raw dataset is downloaded programmatically from the UCI repository, making the workflow reproducible across systems. The pipeline generates metrics tables, trained model artifacts, SHAP and PDP plots, LIME HTML explanations, and error-analysis outputs that are stored in structured output folders.
+
+\subsection{Step-by-Step Execution Plan}
+We first reproduce the baseline HW+XGB+XAI pipeline from the selected paper and run forecasting experiments for both global and appliance-level targets. We then generate SHAP, LIME, PFI, and PDP explainability artifacts. After this, we perform time-based error decomposition by hour, day-of-week, and month to identify where the model underperforms. We further run feature intervention studies through drop-one feature ablation and lag-feature addition experiments. Finally, all outputs are integrated into an interactive proof-of-concept interface.
+
+\section{Expected Proof of Concept (POC)}
+The required POC will be an interactive and demonstrable web dashboard, implemented with Streamlit. The interface allows users to choose forecasting scale and target variable, run the pipeline, and inspect forecast quality through metrics such as MAE, RMSE, and $R^2$. It also presents SHAP summaries, LIME sample explanations, time-based error decomposition charts, and feature-ablation impact tables. This enables evaluators to directly interact with the model and validate both predictive performance and interpretability outputs.
+
+\section{Work Completed So Far (Implementation Status)}
+We have already implemented the end-to-end HW+XGB+XAI training pipeline and validated it through multi-scale experiments with saved metrics. The system currently generates SHAP, LIME, PFI, and PDP artifacts, and includes additional diagnostics such as temporal error decomposition and feature ablation. We have also prepared IEEE-style documentation and reproducible run scripts for straightforward execution and review.
+
+\section{Deliverables}
+The final deliverables include this proposal document, a source-code repository containing the reproducible implementation, an interactive proof-of-concept interface, and a final report with metrics and explainability artifacts.
+
+\section{Conclusion}
+This proposal targets Explainable AI for energy forecasting by reproducing a recent IEEE framework and extending it with deployment-relevant interpretability diagnostics. The project satisfies the course requirements by providing both methodological implementation and an interactive proof of concept with source code.
+
+\bibliographystyle{IEEEtran}
+\begin{thebibliography}{1}
+\bibitem{paper} B. Devanathan, K. Jnana Varshitha, L. Pavan Kumar, S. A. Lakshmanan, and N. Krishna Prakash, ``Explainable AI Framework Using XGBoost With SHAP and LIME for Multi-Scale Household Energy Forecasting,'' \emph{IEEE Access}, 2025, doi: 10.1109/ACCESS.2025.3602673.
+\bibitem{uci} UCI Machine Learning Repository, ``Individual household electric power consumption dataset.'' [Online]. Available: \url{https://archive.ics.uci.edu/dataset/235/individual+household+electric+power+consumption}
+\end{thebibliography}
+
+\end{document}
+
