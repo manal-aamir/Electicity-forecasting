@@ -34,8 +34,8 @@ def main() -> None:
     st.set_page_config(page_title="HW+XGB+XAI Dashboard", layout="wide")
     st.title("Interactive POC: HW + XGBoost + XAI")
     st.caption(
-        "Run forecasting experiments and inspect metrics, explainability, "
-        "error decomposition, and feature ablation in one interface."
+        "Run forecasting experiments and inspect metrics, uncertainty bands, "
+        "explainability, error decomposition, and feature ablation in one interface."
     )
 
     with st.sidebar:
@@ -90,14 +90,33 @@ def main() -> None:
     st.dataframe(metrics, use_container_width=True)
     row = metrics[(metrics["scale"] == sel_scale) & (metrics["target"] == sel_target)]
     if not row.empty:
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("MAE", f"{float(row.iloc[0]['mae']):.4f}")
         c2.metric("RMSE", f"{float(row.iloc[0]['rmse']):.4f}")
         c3.metric("R²", f"{float(row.iloc[0]['r2']):.4f}")
+        cov95 = row.iloc[0].get("coverage_95", None)
+        if cov95 is not None and pd.notna(cov95):
+            c4.metric("95% Coverage", f"{float(cov95):.3f}")
+        else:
+            c4.metric("95% Coverage", "N/A")
     else:
         st.info("No row for selected scale/target in latest run.")
 
-    tab_xai, tab_error, tab_ablation = st.tabs(["XAI Outputs", "Error Decomposition", "Feature Impact"])
+    tab_unc, tab_xai, tab_advanced, tab_error, tab_ablation = st.tabs(
+        ["Uncertainty", "XAI Outputs", "Advanced Insights", "Error Decomposition", "Feature Impact"]
+    )
+
+    with tab_unc:
+        _plot_if_exists(
+            OUT_PLOTS / f"intervals_{sel_scale}_{sel_target}.png",
+            "Prediction intervals (90% / 95%)",
+        )
+        intervals = _read_csv(OUT_TABLES / f"intervals_{sel_scale}_{sel_target}.csv")
+        if intervals is not None:
+            st.markdown("**Interval table (latest rows)**")
+            st.dataframe(intervals.tail(20), use_container_width=True)
+        else:
+            st.info("Interval table not found for current selection.")
 
     with tab_xai:
         c1, c2 = st.columns(2)
@@ -124,6 +143,37 @@ def main() -> None:
             st.markdown(f"LIME explanation file: `{lime_path}`")
         else:
             st.info("LIME explanation file not found for current selection.")
+
+    with tab_advanced:
+        st.markdown("**SHAP interaction dependence plots**")
+        inter_dir = OUT_PLOTS / f"shap_interactions_{sel_scale}_{sel_target}"
+        if inter_dir.exists():
+            images = sorted(inter_dir.glob("*.png"))
+            if images:
+                for p in images:
+                    st.image(str(p), caption=p.name, use_container_width=True)
+            else:
+                st.info("No SHAP interaction plots found yet.")
+        else:
+            st.info("No SHAP interaction directory found yet.")
+
+        st.markdown("**Counterfactual explanations (target: 20% lower prediction)**")
+        cfs = _read_csv(OUT_TABLES / f"counterfactuals_{sel_scale}_{sel_target}.csv")
+        if cfs is not None:
+            st.dataframe(cfs, use_container_width=True)
+        else:
+            st.info("Counterfactual table not found for this selection.")
+
+        st.markdown("**Model confidence vs LIME stability**")
+        _plot_if_exists(
+            OUT_PLOTS / f"lime_stability_vs_uncertainty_{sel_scale}_{sel_target}.png",
+            "LIME stability vs uncertainty",
+        )
+        stabs = _read_csv(OUT_TABLES / f"lime_stability_{sel_scale}_{sel_target}.csv")
+        if stabs is not None:
+            st.dataframe(stabs, use_container_width=True)
+        else:
+            st.info("LIME stability table not found for this selection.")
 
     with tab_error:
         c1, c2, c3 = st.columns(3)

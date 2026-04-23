@@ -91,7 +91,6 @@
 }{%
   \end{list}
   \vspace{4pt}
-  \noindent\rule{\linewidth}{0.4pt}
   \vspace{6pt}
 }
 
@@ -171,6 +170,10 @@ directly rather than relying on attribution alone.
   \item Feature intervention analysis via drop-one ablation and
     target-lag add-feature experiments, quantifying accuracy deltas and
     corresponding SHAP attribution shifts.
+  \item Advanced XAI extensions: SHAP interaction effects, counterfactual
+    recourse recommendations for target reduction, and a confidence-vs-
+    explanation stability analysis linking conformal interval width with
+    LIME consistency.
 \end{itemize}
 
 % ─────────────────────────────────────────────────────────────────────────────
@@ -240,23 +243,14 @@ kitchen, laundry room, and water heater or air conditioning loads.
 
 Let $\mathcal{T} = \{t_1, t_2, \ldots, t_N\}$ denote the full
 timestamp index. Missing values are filled using time-based linear
-interpolation:
-\begin{equation}
-  x(t) = x(t_a) + \frac{t - t_a}{t_b - t_a}\bigl(x(t_b) - x(t_a)\bigr),
-  \label{eq:interp}
-\end{equation}
+interpolation,
 where $t_a$ and $t_b$ are the nearest non-missing timestamps bracketing
 $t$, followed by forward and backward fill for residual gaps.
 
 Cyclical time encodings are added to avoid boundary discontinuities
 with raw integer features. For hour-of-day $h \in \{0,\ldots,23\}$
 and day-of-week $d \in \{0,\ldots,6\}$:
-\begin{align}
-  \text{hour\_sin} &= \sin\!\left(\tfrac{2\pi h}{24}\right), &
-  \text{hour\_cos} &= \cos\!\left(\tfrac{2\pi h}{24}\right), \label{eq:hourcyc}\\[2pt]
-  \text{dow\_sin}  &= \sin\!\left(\tfrac{2\pi d}{7}\right),  &
-  \text{dow\_cos}  &= \cos\!\left(\tfrac{2\pi d}{7}\right).  \label{eq:dowcyc}
-\end{align}
+using sine/cosine transformations for each cycle.
 These encodings give the model a smooth periodic representation of
 time: Euclidean distance between any two time points is proportional
 to their circular distance on the clock or week cycle.
@@ -266,23 +260,11 @@ to their circular distance on the clock or week cycle.
 The one-minute series is resampled to five temporal granularities
 $\mathcal{G} = \{\text{hourly, daily, weekly, monthly, quarterly}\}$.
 For a time window $\mathcal{W}$ of width $g \in \mathcal{G}$:
-\begin{equation}
-  \tilde{x}^{(g)}_{\mathcal{W}} =
-  \begin{cases}
-    \dfrac{1}{|\mathcal{W}|}\displaystyle\sum_{t \in \mathcal{W}} x_t
-      & \text{power-like variables,}\\[6pt]
-    \displaystyle\sum_{t \in \mathcal{W}} x_t
-      & \text{sub-metering channels.}
-  \end{cases}
-  \label{eq:resample}
-\end{equation}
+we use mean aggregation for power-like variables and sum aggregation for
+sub-metering channels.
 Summing the energy channels preserves total energy consumed per period.
 A stationarity check via the Augmented Dickey--Fuller (ADF) test is
-run on the training target per scale:
-\begin{equation}
-  \tau_{\text{ADF}} = \frac{\hat{\delta}}{\operatorname{SE}(\hat{\delta})},
-  \label{eq:adf}
-\end{equation}
+run on the training target per scale,
 where $\hat{\delta}$ is the OLS estimate of the unit-root coefficient
 in $\Delta y_t = \alpha + \beta t + \delta y_{t-1}
 + \sum_{k=1}^{p}\gamma_k\Delta y_{t-k} + \varepsilon_t$.
@@ -299,20 +281,7 @@ The additive Holt--Winters model decomposes the training target $y_t$:
   \label{eq:hw_decomp}
 \end{equation}
 where $\ell_t$ is the level, $b_t$ the trend, $s_t$ the seasonal
-component with period $m$, and $\varepsilon_t$ the residual. The
-smoothing recursions are:
-\begin{align}
-  \ell_t &= \alpha(y_t - s_{t-m}) + (1{-}\alpha)(\ell_{t-1} + b_{t-1}),\label{eq:hw_level}\\
-  b_t    &= \beta^*(\ell_t - \ell_{t-1}) + (1{-}\beta^*)b_{t-1},\label{eq:hw_trend}\\
-  s_t    &= \gamma(y_t - \ell_{t-1} - b_{t-1}) + (1{-}\gamma)s_{t-m},\label{eq:hw_season}
-\end{align}
-with $\alpha,\beta^*,\gamma \in [0,1]$ estimated by minimising
-sum-of-squared one-step forecast errors on training data:
-\begin{equation}
-  \min_{\alpha,\beta^*,\gamma}\;
-  \sum_{t=1}^{T_{\text{train}}} \bigl(y_t - \hat{y}_{t|t-1}\bigr)^2.
-  \label{eq:hw_optim}
-\end{equation}
+component with period $m$, and $\varepsilon_t$ the residual.
 
 The standard HW+ML formulation suffers from leakage: component
 estimates at $t$ depend on $y_t$ yet are used to predict $y_t$.
@@ -327,21 +296,9 @@ at~$t$.
 
 \subsection{Supervised Learning Formulation}
 
-The full feature vector at time $t$ is:
-\begin{equation}
-  \mathbf{x}_t =
-  \bigl[\mathbf{z}_t^\top,\;\mathbf{c}_t^\top,\;\bm{\phi}_t^\top,\;
-  (\mathbf{l}_t^\top)\bigr]^\top,
-  \label{eq:feature_vec}
-\end{equation}
-where $\mathbf{z}_t$ are original covariates,
-$\mathbf{c}_t = [\text{hour\_sin},\text{hour\_cos},\text{dow\_sin},\text{dow\_cos}]^\top$,
-$\bm{\phi}_t$ are the lagged HW components from~\eqref{eq:hw_lag},
-and $\mathbf{l}_t$ is an optional autoregressive lag block:
-\begin{equation}
-  \mathbf{l}_t = \bigl[y_{t-1},\;y_{t-24},\;y_{t-168}\bigr]^\top.
-  \label{eq:lag_features}
-\end{equation}
+The feature vector at time $t$ combines original covariates, cyclical
+time encodings, lagged HW components from~\eqref{eq:hw_lag}, and an
+optional autoregressive lag block (e.g., $y_{t-1}, y_{t-24}, y_{t-168}$).
 The prediction target is $y_{t+1}$:
 \begin{equation}
   \hat{y}_{t+1} = f(\mathbf{x}_t).
@@ -356,26 +313,12 @@ XGBoost learns an additive ensemble of $K$ regression trees:
   \label{eq:xgb_ensemble}
 \end{equation}
 The objective at iteration $k$ is:
-\begin{equation}
-  \mathcal{L}^{(k)} =
-  \sum_{t} \ell\!\left(y_{t+1},\,\hat{y}_{t+1}^{(k-1)} + f_k(\mathbf{x}_t)\right)
-  + \Omega(f_k),
-  \label{eq:xgb_obj}
-\end{equation}
-with regularisation:
-\begin{equation}
-  \Omega(f_k) = \gamma T + \tfrac{1}{2}\lambda\|\mathbf{w}\|^2,
-  \label{eq:xgb_reg}
-\end{equation}
+with a squared-error loss and tree-complexity regularisation.
 where $T$ is the number of leaves, $\mathbf{w}$ the leaf weight
 vector, $\gamma$ the minimum split gain, and $\lambda$ the $L_2$
 penalty. Hyperparameter tuning uses \texttt{TimeSeriesSplit}
 ($n{=}5$) and \texttt{GridSearchCV}. Feature standardisation:
-\begin{equation}
-  \tilde{x}_{tj} =
-  \frac{x_{tj} - \mu_j^{\text{train}}}{\sigma_j^{\text{train}}},
-  \label{eq:standardise}
-\end{equation}
+is applied using training-set statistics only,
 with $\mu_j^{\text{train}}, \sigma_j^{\text{train}}$ computed on
 training data only.
 
@@ -386,43 +329,34 @@ training data only.
 
 Four complementary methods are applied to each trained model.
 
-\textbf{SHAP (TreeSHAP)} computes Shapley values:
-\begin{equation}
-  \phi_j =
-  \sum_{S \subseteq \mathcal{F}\setminus\{j\}}
-  \frac{|S|!\,(|\mathcal{F}|-|S|-1)!}{|\mathcal{F}|!}
-  \bigl[v(S\cup\{j\}) - v(S)\bigr],
-  \label{eq:shap}
-\end{equation}
+\textbf{SHAP (TreeSHAP)} computes Shapley-value attributions for each
+feature,
 where $v(S)$ is the model output conditioned on features in
 $S$~\cite{lundberg2017shap}. TreeSHAP runs in
 $\mathcal{O}(TLD^2)$ time.
 
 \textbf{LIME} fits a local linear surrogate $g$ around instance
-$\mathbf{x}_0$:
-\begin{equation}
-  g^* = \operatorname*{arg\,min}_{g\in\mathcal{G}}
-  \sum_{z}\pi_{\mathbf{x}_0}(z)\,\bigl[f(z)-g(z)\bigr]^2 + \Omega(g),
-  \label{eq:lime}
-\end{equation}
+$\mathbf{x}_0$ by minimizing weighted local approximation error,
 with proximity kernel
 $\pi_{\mathbf{x}_0}(z) = \exp\!\left(-D(z,\mathbf{x}_0)^2/\sigma^2\right)$~\cite{ribeiro2016lime}.
 
-\textbf{Permutation Feature Importance (PFI)}:
-\begin{equation}
-  \text{PFI}_j =
-  \text{RMSE}(\mathbf{X}_{\pi_j}) - \text{RMSE}(\mathbf{X}),
-  \label{eq:pfi}
-\end{equation}
+\textbf{Permutation Feature Importance (PFI)} measures error increase
+after shuffling one feature at a time,
 where $\mathbf{X}_{\pi_j}$ has column $j$ randomly permuted.
 
 \textbf{Partial Dependence (PDP)} estimates the marginal effect of
-feature $j$:
-\begin{equation}
-  \hat{f}_j(x_j) =
-  \frac{1}{n}\sum_{i=1}^{n} f\!\left(x_j,\,\mathbf{x}_i^{(-j)}\right).
-  \label{eq:pdp}
-\end{equation}
+feature $j$ by averaging predictions over the empirical distribution of
+all other features.
+
+\textbf{SHAP interaction dependence} is used to visualize pairwise
+effects by plotting a feature's SHAP value while color-coding by an
+interacting feature. This reveals conditional behavior hidden by
+single-feature rankings.
+
+\textbf{Counterfactual recourse} addresses the practical question:
+``what should change to reduce predicted consumption by 20\%?'' We
+search plausible feature ranges and report minimal-change suggestions
+that move predictions toward that target.
 
 \subsection{Error Decomposition by Time Slice}
 
@@ -464,6 +398,19 @@ feature set. Record:
 \end{equation}
 alongside SHAP ranking shifts between $f_{\mathcal{F}}$ and
 $f_{\mathcal{F}^+}$.
+
+\subsection{Uncertainty and Explanation Stability}
+
+Split conformal prediction intervals are computed at 90\% and 95\%
+levels. With calibration residual quantile $\hat{q}_{1-\alpha}$, the
+interval for each test point is
+$[\hat{y}_{t+1}-\hat{q}_{1-\alpha},\hat{y}_{t+1}+\hat{q}_{1-\alpha}]$.
+We report empirical coverage and average width.
+
+To connect uncertainty with explanation reliability, LIME is rerun with
+multiple seeds per instance. Stability is measured as mean pairwise
+cosine similarity of normalized local weight vectors, then correlated
+(Spearman) with 95\% interval width.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Experimental Setup}
@@ -561,7 +508,7 @@ removed, suggesting shared predictive contribution with correlated
 features. A smaller subset showed clear positive $\Delta\text{RMSE}$
 on removal, confirming genuine predictive necessity.
 
-Adding target lag features via \eqref{eq:lag_features} at hourly
+Adding target lag features at hourly
 resolution improved RMSE materially, with $\Delta\text{RMSE}^+$ from
 \eqref{eq:add_feat} driven primarily by the 1-step and 24-step lags.
 The SHAP ranking shifted after lags were added: HW-derived features
@@ -581,12 +528,26 @@ coarser scales where within-day variation is averaged out.
 
 LIME explanations for selected test instances show that local feature
 rankings can differ substantially from global SHAP rankings,
-particularly for unusual consumption periods. PFI rankings computed
-via \eqref{eq:pfi} do not always match SHAP rankings---a signal of
+particularly for unusual consumption periods. PFI rankings do not always
+match SHAP rankings---a signal of
 features whose importance depends on interaction effects rather than
-independent marginal contribution. PDP plots via \eqref{eq:pdp}
+independent marginal contribution. PDP plots
 confirm expected monotonic relationships for level and trend
 components and nonlinear response curves for cyclical time features.
+
+SHAP interaction plots reveal that feature influence is context-
+dependent. For example, the importance of appliance sub-metering can
+increase in specific time windows rather than acting uniformly over the
+day.
+
+Counterfactual outputs provide actionable recourse by suggesting
+feature changes associated with lower predicted consumption. These are
+model-based recommendations (not causal guarantees), but they improve
+practical interpretability for end users.
+
+Confidence-vs-stability analysis shows that instances with wider 95\%
+intervals tend to have less stable LIME explanations, indicating local
+explanations are less reliable when model uncertainty is high.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Discussion}
@@ -601,7 +562,7 @@ value---it should be a default part of any evaluation pipeline, not
 an optional diagnostic.
 
 Second, feature attribution is not the same as feature necessity.
-High Shapley values \eqref{eq:shap} are often shared across
+High SHAP values are often shared across
 correlated features. Ablation studies
 \eqref{eq:ablation_rmse}--\eqref{eq:ablation_r2} are the more direct
 test, and their results do not always match attribution rankings.
@@ -609,17 +570,21 @@ Both should be reported when interpretability matters for deployment.
 
 Third, the HW+XGB combination offers a reasonable middle ground
 between fully statistical and fully black-box approaches. The
-Holt--Winters recursions \eqref{eq:hw_level}--\eqref{eq:hw_season}
+Holt--Winters decomposition
 are transparent and produce interpretable components. XGBoost handles
 the non-linear residuals via \eqref{eq:xgb_ensemble}. The combination
 is not the highest-accuracy possible approach, but it is
 substantially more interpretable and easier to audit.
 
+Fourth, combining uncertainty and explanation stability is more
+informative than either alone. A local explanation attached to a
+high-uncertainty prediction should be treated as exploratory rather
+than definitive.
+
 \subsection{Threats to Validity}
 
-The main limitations are single-dataset evaluation, limited
-hyperparameter search breadth, and absence of uncertainty
-quantification. The dataset covers a single household in France;
+The main limitations are single-dataset evaluation and limited
+hyperparameter search breadth. The dataset covers a single household in France;
 generalisation to different household types, climates, or grid
 contexts is an open question. The daily-scale negative $R^2$ warrants
 further investigation: it may reflect aggregation collapsing the
@@ -637,17 +602,20 @@ leakage-aware component lagging, temporal error decomposition, drop-one
 ablation, and lag add-feature experiments---addresses the evaluation
 and interpretability gaps most published HW+ML work leaves open.
 
-The main result is not a new state-of-the-art accuracy number. It is
-a more honest picture of where a well-built baseline model succeeds and
+The main result is not a new state-of-the-art accuracy number. It is a
+more honest picture of where a well-built baseline model succeeds and
 where it struggles, and a cleaner methodology for connecting feature
-importance claims to actual predictive necessity. The daily-scale
-result ($R^2 = -0.228$) is a useful reminder that aggregation does
-not always help: smoothing can collapse the very signal a model needs.
+importance claims to actual predictive necessity. The added SHAP
+interaction, counterfactual, and confidence-vs-stability analyses turn
+the interpretability layer into a stronger decision-support workflow.
+The daily-scale result ($R^2 = -0.228$) is a useful reminder that
+aggregation does not always help: smoothing can collapse the very
+signal a model needs.
 
 Future work will focus on: (i)~cross-dataset generalisation to
 evaluate robustness across household types and geographies;
-(ii)~uncertainty quantification via conformal prediction or quantile
-regression; (iii)~concept-drift detection and adaptive retraining;
+(ii)~causal and feasibility-constrained counterfactuals;
+(iii)~concept-drift detection and adaptive retraining;
 and (iv)~richer contextual features---weather data, occupancy
 proxies---most likely to reduce error in the peak-period windows
 identified by the error decomposition analysis.
@@ -661,8 +629,11 @@ are organised under \texttt{outputs/} as follows:
 performance; \texttt{error\_slice\_*} tables and plots for temporal
 decomposition; \texttt{ablation\_drop1\_*} for ablation;
 \texttt{pfi\_*} for permutation importance; \texttt{shap\_summary\_*}
-and \texttt{pdp\_*} for global explanations; and \texttt{lime\_*}
-HTML for per-instance local explanations.
+and \texttt{pdp\_*} for global explanations; \texttt{shap\_interactions\_*}
+for interaction effects; \texttt{counterfactuals\_*} for recourse
+recommendations; \texttt{intervals\_*} for uncertainty bands; and
+\texttt{lime\_*} plus \texttt{lime\_stability\_*} for local
+explanations and stability analysis.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \begin{thebibliography}{00}

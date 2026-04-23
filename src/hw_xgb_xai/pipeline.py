@@ -15,8 +15,17 @@ from .data import download_uci_dataset, interpolate_missing, load_power_consumpt
 from .features import add_cyclical_time_features, add_lag_features, hw_components_one_step_ahead_features
 from .modeling import compute_metrics, tune_xgb_time_series
 from .ablation import drop_one_feature_ablation
+from .counterfactual import generate_counterfactual_recourse
 from .error_analysis import plot_slice_rmse_bar, slice_rmse_table
-from .xai import run_lime_explanations, run_pdp, run_permutation_feature_importance, run_shap_summary
+from .uncertainty import fit_split_conformal_bands, plot_prediction_intervals, save_interval_table
+from .xai import (
+    run_lime_explanations,
+    run_lime_stability_vs_uncertainty,
+    run_pdp,
+    run_permutation_feature_importance,
+    run_shap_interaction_dependence_plots,
+    run_shap_summary,
+)
 
 
 def _ensure_output_dirs(project_root: Path) -> dict[str, Path]:
@@ -148,6 +157,32 @@ def run_experiment(
             y_pred = model.predict(X_test_s)
             m = compute_metrics(y_test.to_numpy(), y_pred)
 
+            # Uncertainty quantification: split conformal prediction intervals (90% and 95%)
+            bands = fit_split_conformal_bands(
+                X_train=X_train_s,
+                y_train=y_train.to_numpy(),
+                X_test=X_test_s,
+                y_test=y_test.to_numpy(),
+                xgb_params=model.get_params(),
+            )
+            interval_df = save_interval_table(
+                index=X_test.index,
+                y_true=y_test.to_numpy(),
+                y_pred=y_pred,
+                bands=bands,
+                out_csv=out["tables"] / f"intervals_{scale}_{target}.csv",
+            )
+            plot_prediction_intervals(
+                interval_df=interval_df,
+                out_png=out["plots"] / f"intervals_{scale}_{target}.png",
+                title=f"Prediction Intervals ({scale}, {target})",
+            )
+
+            cov90 = bands[0.1].coverage if 0.1 in bands else float("nan")
+            wid90 = bands[0.1].avg_width if 0.1 in bands else float("nan")
+            cov95 = bands[0.05].coverage if 0.05 in bands else float("nan")
+            wid95 = bands[0.05].avg_width if 0.05 in bands else float("nan")
+
             # Feature ablation: remove one feature -> retrain -> measure delta accuracy
             if run_ablation:
                 # pick a manageable set: top-N by XGBoost gain
@@ -204,6 +239,10 @@ def run_experiment(
                     "n_train": int(X_train.shape[0]),
                     "n_test": int(X_test.shape[0]),
                     **asdict(m),
+                    "coverage_90": cov90,
+                    "avg_width_90": wid90,
+                    "coverage_95": cov95,
+                    "avg_width_95": wid95,
                     "best_params": json.dumps(gs.best_params_),
                 }
             )
@@ -231,6 +270,14 @@ def run_experiment(
                 feature_names=feat_names,
                 out_png=out["plots"] / f"shap_summary_{scale}_{target}.png",
                 max_samples=shap_samples,
+            )
+            run_shap_interaction_dependence_plots(
+                model=model,
+                X_test=X_test_s,
+                feature_names=feat_names,
+                out_dir=out["plots"] / f"shap_interactions_{scale}_{target}",
+                max_samples=shap_samples,
+                top_n=3,
             )
 
             run_permutation_feature_importance(
@@ -265,6 +312,30 @@ def run_experiment(
                 feature_names=feat_names,
                 out_dir=out["explanations"] / f"lime_{scale}_{target}",
                 num_instances=lime_samples,
+            )
+            if "upper_95" in interval_df.columns and "lower_95" in interval_df.columns:
+                width95 = (interval_df["upper_95"] - interval_df["lower_95"]).to_numpy()
+                run_lime_stability_vs_uncertainty(
+                    model=model,
+                    X_train=X_train_s,
+                    X_test=X_test_s,
+                    feature_names=feat_names,
+                    width95=width95,
+                    out_csv=out["tables"] / f"lime_stability_{scale}_{target}.csv",
+                    out_png=out["plots"] / f"lime_stability_vs_uncertainty_{scale}_{target}.png",
+                    n_instances=min(8, len(X_test_s)),
+                    n_repeats=5,
+                )
+
+            generate_counterfactual_recourse(
+                model=model,
+                scaler=scaler,
+                X_train=X_train,
+                X_test=X_test,
+                y_pred_test=y_pred,
+                reduction_target=0.2,
+                n_instances=min(5, len(X_test)),
+                out_csv=out["tables"] / f"counterfactuals_{scale}_{target}.csv",
             )
 
     metrics_df = pd.DataFrame(metrics_rows).sort_values(["target", "scale"])
